@@ -259,6 +259,210 @@ docker compose -f test/scan_controller_ab/docker-compose.yaml run --rm \
   --album "AudioMuse Scan Controller AB" --limit 1 --json
 ```
 
+## Multiple Albums Added, Scan Only One
+
+Use this scenario to prove that several newly added albums can exist in
+Navidrome, while AudioMuse only analyzes one selected album.
+
+### 1. Create Two New Albums
+
+From the repo root:
+
+```bash
+mkdir -p test/scan_controller_ab/music/manual-target
+mkdir -p test/scan_controller_ab/music/manual-other
+
+ffmpeg -y \
+  -i "test/songs/Aaron Dunn - Minuet - Notebook for Anna Magdalena.mp3" \
+  -codec copy \
+  -metadata album="Manual Target Album" \
+  -metadata artist="Manual Test Artist" \
+  -metadata album_artist="Manual Test Artist" \
+  -metadata title="Target Track 1" \
+  -metadata track="1" \
+  "test/scan_controller_ab/music/manual-target/01-target.mp3"
+
+ffmpeg -y \
+  -i "test/songs/Art Flower - Art Flower - Creamy Snowflakes.mp3" \
+  -codec copy \
+  -metadata album="Manual Other Album" \
+  -metadata artist="Manual Test Artist" \
+  -metadata album_artist="Manual Test Artist" \
+  -metadata title="Other Track 1" \
+  -metadata track="1" \
+  "test/scan_controller_ab/music/manual-other/01-other.mp3"
+```
+
+### 2. Rescan Navidrome
+
+```bash
+curl "http://localhost:14533/rest/startScan.view?u=admin&p=enc:617564696f6d75736570617373776f7264&v=1.16.1&c=test&f=json"
+```
+
+In Navidrome, confirm both albums are visible:
+
+```text
+Manual Target Album
+Manual Other Album
+```
+
+### 3. Confirm Both Albums Are Missing AudioMuse Analysis
+
+Check the target album:
+
+```bash
+docker compose -f test/scan_controller_ab/docker-compose.yaml run --rm \
+  --entrypoint python3 \
+  ab-runner \
+  /app/tools/audiomuse_scan_controller.py --skip-clap --skip-lyrics status \
+  --album "Manual Target Album" --json
+```
+
+Check the other album:
+
+```bash
+docker compose -f test/scan_controller_ab/docker-compose.yaml run --rm \
+  --entrypoint python3 \
+  ab-runner \
+  /app/tools/audiomuse_scan_controller.py --skip-clap --skip-lyrics status \
+  --album "Manual Other Album" --json
+```
+
+Both should report missing MusicNN analysis before enqueueing.
+
+### 4. Dry-Run Only The Target Album
+
+```bash
+docker compose -f test/scan_controller_ab/docker-compose.yaml run --rm \
+  --entrypoint python3 \
+  ab-runner \
+  /app/tools/audiomuse_scan_controller.py --skip-clap --skip-lyrics enqueue \
+  --album "Manual Target Album" --dry-run --json
+```
+
+Expected result:
+
+- `selected_tracks` matches only tracks from `Manual Target Album`
+- `enqueued_jobs` is `0`
+- `Manual Other Album` is not included
+
+### 5. Enqueue Only The Target Album
+
+```bash
+docker compose -f test/scan_controller_ab/docker-compose.yaml run --rm \
+  --entrypoint python3 \
+  ab-runner \
+  /app/tools/audiomuse_scan_controller.py --skip-clap --skip-lyrics enqueue \
+  --album "Manual Target Album" --json
+```
+
+Watch the worker:
+
+```bash
+docker logs -f am-scan-ab-worker-patched
+```
+
+### 6. Verify Only The Target Album Changed
+
+First verify through the scan-controller status view. Run status for the target
+album again:
+
+```bash
+docker compose -f test/scan_controller_ab/docker-compose.yaml run --rm \
+  --entrypoint python3 \
+  ab-runner \
+  /app/tools/audiomuse_scan_controller.py --skip-clap --skip-lyrics status \
+  --album "Manual Target Album" --json
+```
+
+Run status for the other album again:
+
+```bash
+docker compose -f test/scan_controller_ab/docker-compose.yaml run --rm \
+  --entrypoint python3 \
+  ab-runner \
+  /app/tools/audiomuse_scan_controller.py --skip-clap --skip-lyrics status \
+  --album "Manual Other Album" --json
+```
+
+Expected proof:
+
+- `Manual Target Album` has more complete tracks and fewer missing tracks.
+- `Manual Other Album` still reports missing tracks.
+- The worker log and job result should not show analysis for `Manual Other Album`.
+
+### 7. Verify Through The Navidrome API And AudioMuse API
+
+Get the Navidrome track ID for the selected album:
+
+```bash
+TARGET_ID=$(curl -s "http://localhost:14533/rest/search3.view?u=admin&p=enc:617564696f6d75736570617373776f7264&v=1.16.1&c=test&f=json&query=Manual%20Target%20Album&songCount=20" \
+  | python3 -c 'import json,sys; songs=json.load(sys.stdin)["subsonic-response"]["searchResult3"].get("song", []); songs=songs if isinstance(songs, list) else [songs]; print(songs[0]["id"])')
+
+echo "$TARGET_ID"
+```
+
+Get the Navidrome track ID for the album that should not have been scanned:
+
+```bash
+OTHER_ID=$(curl -s "http://localhost:14533/rest/search3.view?u=admin&p=enc:617564696f6d75736570617373776f7264&v=1.16.1&c=test&f=json&query=Manual%20Other%20Album&songCount=20" \
+  | python3 -c 'import json,sys; songs=json.load(sys.stdin)["subsonic-response"]["searchResult3"].get("song", []); songs=songs if isinstance(songs, list) else [songs]; print(songs[0]["id"])')
+
+echo "$OTHER_ID"
+```
+
+Ask the patched AudioMuse HTTP API for the target track score:
+
+```bash
+curl -i "http://localhost:18082/external/get_score?id=$TARGET_ID"
+```
+
+Expected result:
+
+- HTTP `200`
+- JSON includes `"album": "Manual Target Album"`
+- JSON includes the same `item_id` as `$TARGET_ID`
+
+Ask the same API for the other album's track:
+
+```bash
+curl -i "http://localhost:18082/external/get_score?id=$OTHER_ID"
+```
+
+Expected result:
+
+- HTTP `404`
+- response says the score was not found
+
+### 8. Verify Directly In The Patched AudioMuse Database
+
+Query the patched PostgreSQL database:
+
+```bash
+docker exec -e PGPASSWORD=audiomusepassword am-scan-ab-postgres-patched \
+  psql -U audiomuse -d audiomusedb \
+  -c "SELECT s.album, s.title, s.item_id, e.item_id IS NOT NULL AS has_embedding FROM score s LEFT JOIN embedding e ON e.item_id = s.item_id WHERE s.album IN ('Manual Target Album', 'Manual Other Album') ORDER BY s.album, s.title;"
+```
+
+Expected result:
+
+- rows exist for `Manual Target Album`
+- every `Manual Target Album` row has `has_embedding` set to `t`
+- no rows exist for `Manual Other Album`
+
+You can also check the two exact Navidrome track IDs:
+
+```bash
+docker exec -e PGPASSWORD=audiomusepassword am-scan-ab-postgres-patched \
+  psql -U audiomuse -d audiomusedb \
+  -c "SELECT s.album, s.title, s.item_id, e.item_id IS NOT NULL AS has_embedding FROM score s LEFT JOIN embedding e ON e.item_id = s.item_id WHERE s.item_id IN ('$TARGET_ID', '$OTHER_ID') ORDER BY s.album, s.title;"
+```
+
+Expected result:
+
+- `$TARGET_ID` is present
+- `$OTHER_ID` is absent
+
 ## What Each Scenario Proves
 
 | Scenario | What it proves |
@@ -267,6 +471,7 @@ docker compose -f test/scan_controller_ab/docker-compose.yaml run --rm \
 | CLI E2E | The real CLI can discover missing tracks, dry-run, enqueue, and drive a real worker job. |
 | MP3 + FLAC album | Navidrome scans multiple audio formats and the utility sees them. |
 | Manual add music | A user can add files, scan Navidrome, and see AudioMuse missing counts change. |
+| Multiple albums, one selected | The CLI can restrict AudioMuse analysis to one named album while leaving other new albums untouched. |
 | `enqueue --limit 1` | The utility can feed a controlled small batch instead of a full library run. |
 | Re-running `status` | The DB status changes after worker analysis completes. |
 
