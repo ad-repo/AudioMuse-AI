@@ -1,0 +1,5 @@
+FROM ghcr.io/neptunehub/audiomuse-ai:latest
+
+COPY test/scan_controller_ab/patch_allowlist.py /tmp/patch_allowlist.py
+RUN python3 /tmp/patch_allowlist.py && rm /tmp/patch_allowlist.py
+COPY test/scan_controller_ab/ab_test.py /app/test/scan_controller_ab/ab_test.py

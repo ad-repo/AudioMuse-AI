@@ -1,0 +1,180 @@
+services:
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: am-scan-ab-navidrome
+    ports:
+      - "14533:4533"
+    environment:
+      ND_MUSICFOLDER: /music
+      ND_DEVAUTOCREATEADMINPASSWORD: audiomusepassword
+      ND_SCANSCHEDULE: 1h
+      ND_LOGLEVEL: info
+      ND_DEFAULTREPORTREALPATH: "true"
+    volumes:
+      - ./navidrome-data:/data
+      - ./music:/music:ro
+    restart: unless-stopped
+
+  redis-baseline:
+    image: redis:7-alpine
+    container_name: am-scan-ab-redis-baseline
+    restart: unless-stopped
+
+  postgres-baseline:
+    image: postgres:15-alpine
+    container_name: am-scan-ab-postgres-baseline
+    ports:
+      - "15441:5432"
+    environment:
+      POSTGRES_USER: audiomuse
+      POSTGRES_PASSWORD: audiomusepassword
+      POSTGRES_DB: audiomusedb
+    restart: unless-stopped
+
+  flask-baseline:
+    image: ghcr.io/neptunehub/audiomuse-ai:latest
+    container_name: am-scan-ab-flask-baseline
+    ports:
+      - "18081:8000"
+    environment: &baseline-env
+      SERVICE_TYPE: flask
+      MEDIASERVER_TYPE: navidrome
+      NAVIDROME_URL: http://navidrome:4533
+      NAVIDROME_USER: admin
+      NAVIDROME_PASSWORD: audiomusepassword
+      POSTGRES_USER: audiomuse
+      POSTGRES_PASSWORD: audiomusepassword
+      POSTGRES_DB: audiomusedb
+      POSTGRES_HOST: postgres-baseline
+      POSTGRES_PORT: "5432"
+      REDIS_URL: redis://redis-baseline:6379/0
+      CLAP_ENABLED: "false"
+      LYRICS_ENABLED: "false"
+      MULAN_ENABLED: "false"
+      AI_MODEL_PROVIDER: NONE
+      TEMP_DIR: /app/temp_audio
+    volumes:
+      - temp-baseline-flask:/app/temp_audio
+    depends_on:
+      - navidrome
+      - redis-baseline
+      - postgres-baseline
+    restart: unless-stopped
+
+  worker-baseline:
+    image: ghcr.io/neptunehub/audiomuse-ai:latest
+    container_name: am-scan-ab-worker-baseline
+    environment:
+      <<: *baseline-env
+      SERVICE_TYPE: worker
+      RQ_MAX_JOBS: "20"
+    volumes:
+      - temp-baseline-worker:/app/temp_audio
+    depends_on:
+      - navidrome
+      - redis-baseline
+      - postgres-baseline
+    restart: unless-stopped
+
+  redis-patched:
+    image: redis:7-alpine
+    container_name: am-scan-ab-redis-patched
+    restart: unless-stopped
+
+  postgres-patched:
+    image: postgres:15-alpine
+    container_name: am-scan-ab-postgres-patched
+    ports:
+      - "15442:5432"
+    environment:
+      POSTGRES_USER: audiomuse
+      POSTGRES_PASSWORD: audiomusepassword
+      POSTGRES_DB: audiomusedb
+    restart: unless-stopped
+
+  flask-patched:
+    image: audiomuse-ai-scan-controller-patched:local
+    build:
+      context: ../..
+      dockerfile: test/scan_controller_ab/Dockerfile.patched
+    container_name: am-scan-ab-flask-patched
+    ports:
+      - "18082:8000"
+    environment: &patched-env
+      SERVICE_TYPE: flask
+      MEDIASERVER_TYPE: navidrome
+      NAVIDROME_URL: http://navidrome:4533
+      NAVIDROME_USER: admin
+      NAVIDROME_PASSWORD: audiomusepassword
+      POSTGRES_USER: audiomuse
+      POSTGRES_PASSWORD: audiomusepassword
+      POSTGRES_DB: audiomusedb
+      POSTGRES_HOST: postgres-patched
+      POSTGRES_PORT: "5432"
+      REDIS_URL: redis://redis-patched:6379/0
+      CLAP_ENABLED: "false"
+      LYRICS_ENABLED: "false"
+      MULAN_ENABLED: "false"
+      AI_MODEL_PROVIDER: NONE
+      TEMP_DIR: /app/temp_audio
+    volumes:
+      - temp-patched-flask:/app/temp_audio
+    depends_on:
+      - navidrome
+      - redis-patched
+      - postgres-patched
+    restart: unless-stopped
+
+  worker-patched:
+    image: audiomuse-ai-scan-controller-patched:local
+    build:
+      context: ../..
+      dockerfile: test/scan_controller_ab/Dockerfile.patched
+    container_name: am-scan-ab-worker-patched
+    environment:
+      <<: *patched-env
+      SERVICE_TYPE: worker
+      RQ_MAX_JOBS: "20"
+    volumes:
+      - temp-patched-worker:/app/temp_audio
+    depends_on:
+      - navidrome
+      - redis-patched
+      - postgres-patched
+    restart: unless-stopped
+
+  ab-runner:
+    image: audiomuse-ai-scan-controller-patched:local
+    build:
+      context: ../..
+      dockerfile: test/scan_controller_ab/Dockerfile.patched
+    profiles: ["runner"]
+    environment:
+      NAVIDROME_URL: http://navidrome:4533
+      NAVIDROME_USER: admin
+      NAVIDROME_PASSWORD: audiomusepassword
+      BASELINE_POSTGRES_HOST: postgres-baseline
+      BASELINE_REDIS_URL: redis://redis-baseline:6379/0
+      PATCHED_POSTGRES_HOST: postgres-patched
+      PATCHED_REDIS_URL: redis://redis-patched:6379/0
+      POSTGRES_USER: audiomuse
+      POSTGRES_PASSWORD: audiomusepassword
+      POSTGRES_DB: audiomusedb
+      POSTGRES_PORT: "5432"
+      CLAP_ENABLED: "false"
+      LYRICS_ENABLED: "false"
+      MULAN_ENABLED: "false"
+      TEMP_DIR: /tmp
+    depends_on:
+      - navidrome
+      - worker-baseline
+      - worker-patched
+      - flask-baseline
+      - flask-patched
+    command: python3 /app/test/scan_controller_ab/ab_test.py
+
+volumes:
+  temp-baseline-flask:
+  temp-baseline-worker:
+  temp-patched-flask:
+  temp-patched-worker:
