@@ -74,3 +74,34 @@ python tools/audiomuse_scan_controller.py --skip-clap status
 python tools/audiomuse_scan_controller.py --skip-lyrics enqueue --dry-run
 ```
 
+## Test Harnesses
+
+Run the dependency-free controller harness:
+
+```bash
+python tools/test_scan_controller_harness.py
+```
+
+Run the runtime smoke test inside the AudioMuse image against local Postgres
+and Redis containers on the `deployment_default` Docker network:
+
+```bash
+docker run --rm --network deployment_default \
+  -v "$PWD:/app" -w /app \
+  -e MEDIASERVER_TYPE=navidrome \
+  -e POSTGRES_USER=audiomuse \
+  -e POSTGRES_PASSWORD=audiomusepassword \
+  -e POSTGRES_DB=audiomusedb \
+  -e POSTGRES_HOST=postgres \
+  -e POSTGRES_PORT=5432 \
+  -e REDIS_URL=redis://redis:6379/0 \
+  -e CLAP_ENABLED=true \
+  -e LYRICS_ENABLED=false \
+  -e TEMP_DIR=/tmp \
+  ghcr.io/neptunehub/audiomuse-ai:latest \
+  python3 tools/test_scan_controller_runtime.py
+```
+
+The runtime smoke test starts a tiny fake Navidrome/Subsonic endpoint in the
+test process, inserts synthetic rows into PostgreSQL, verifies scan status,
+enqueues RQ jobs with track allowlists, and cleans up its rows and jobs.

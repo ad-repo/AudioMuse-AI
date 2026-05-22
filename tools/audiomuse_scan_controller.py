@@ -90,6 +90,15 @@ def load_statuses(include_clap: bool, include_lyrics: bool) -> list[TrackStatus]
     missing_clap = _missing_ids("clap_embedding", track_ids) if include_clap else set()
     missing_lyrics = _missing_ids("lyrics_embedding", track_ids) if include_lyrics else set()
 
+    return build_statuses_from_songs(songs, existing_musicnn, missing_clap, missing_lyrics)
+
+
+def build_statuses_from_songs(
+    songs: list[dict],
+    existing_musicnn: set[str],
+    missing_clap: set[str],
+    missing_lyrics: set[str],
+) -> list[TrackStatus]:
     statuses: list[TrackStatus] = []
     for song in songs:
         track_id = song.get("Id") or song.get("id")
