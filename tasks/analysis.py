@@ -365,7 +365,7 @@ def analyze_track(file_path, mood_labels_list, model_paths, onnx_sessions=None, 
 
 
 # --- RQ Task Definitions ---
-def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id):
+def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id, only_track_ids=None):
     from .clap_analyzer import is_clap_available, get_or_cache_other_feature_text_embeddings
 
     current_job = get_current_job(redis_conn)
@@ -406,6 +406,17 @@ def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id):
         try:
             log_and_update_album_task(f"Fetching tracks for album: {album_name}", 5)
             tracks = get_tracks_from_album(album_id)
+            if only_track_ids is not None:
+                allowed_track_ids = {str(track_id) for track_id in only_track_ids}
+                original_track_count = len(tracks or [])
+                tracks = [
+                    track for track in (tracks or [])
+                    if str(track.get('Id')) in allowed_track_ids
+                ]
+                logger.info(
+                    f"Track allowlist active for album '{album_name}': "
+                    f"{len(tracks)}/{original_track_count} tracks selected."
+                )
             if not tracks:
                 log_and_update_album_task(f"No tracks found for album: {album_name}", 100, task_state=TASK_STATUS_SUCCESS)
                 return {"status": "SUCCESS", "message": f"No tracks in album {album_name}", "tracks_analyzed": 0}
