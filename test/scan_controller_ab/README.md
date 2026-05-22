@@ -47,6 +47,31 @@ patched result: {'status': 'SUCCESS', 'tracks_analyzed': 0, 'tracks_skipped': 1,
 A/B scan-controller deployment test: PASS
 ```
 
+Run the utility-driven E2E test:
+
+```bash
+./test/scan_controller_ab/run-cli-e2e.sh
+```
+
+This runs the actual command-line utility against the patched stack:
+
+- `status --album "AudioMuse Scan Controller AB" --json`
+- `export-missing --album "AudioMuse Scan Controller AB"`
+- `enqueue --album "AudioMuse Scan Controller AB" --dry-run --json`
+- `enqueue --album "AudioMuse Scan Controller AB" --limit 1 --json`
+
+Example passing transcript:
+
+```text
+status: {'affected_albums': 1, 'complete': 1, 'missing_any': 3, ...}
+exported missing IDs: [...]
+dry-run: {'affected_albums': 1, 'batches': 1, 'enqueued_jobs': 0, 'selected_tracks': 1}
+enqueue: {'affected_albums': 1, 'batches': 1, 'enqueued_jobs': 1, 'selected_tracks': 1}
+cli job ...: JobStatus.FINISHED
+worker result: {'status': 'SUCCESS', 'tracks_analyzed': 1, 'tracks_skipped': 0, 'total_tracks_in_album': 1}
+CLI scan-controller E2E test: PASS
+```
+
 Useful URLs:
 
 - Navidrome: http://localhost:14533

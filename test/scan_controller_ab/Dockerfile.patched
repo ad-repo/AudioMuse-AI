@@ -2,4 +2,6 @@ FROM ghcr.io/neptunehub/audiomuse-ai:latest
 
 COPY test/scan_controller_ab/patch_allowlist.py /tmp/patch_allowlist.py
 RUN python3 /tmp/patch_allowlist.py && rm /tmp/patch_allowlist.py
+COPY tools/audiomuse_scan_controller.py /app/tools/audiomuse_scan_controller.py
 COPY test/scan_controller_ab/ab_test.py /app/test/scan_controller_ab/ab_test.py
+COPY test/scan_controller_ab/cli_e2e_test.py /app/test/scan_controller_ab/cli_e2e_test.py

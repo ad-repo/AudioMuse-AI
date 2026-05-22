@@ -33,3 +33,53 @@ if needle not in text:
 text = text.replace(needle, insert, 1)
 
 path.write_text(text)
+
+nav_path = Path("/app/tasks/mediaserver_navidrome.py")
+nav_text = nav_path.read_text()
+old_search_dict = (
+    "                    all_songs.append({\n"
+    "                        'Id': s.get('id'), \n"
+    "                        'Name': title, \n"
+    "                        'AlbumArtist': artist_name,\n"
+    "                        'ArtistId': artist_id,\n"
+    "                        'Path': s.get('path')\n"
+    "                    })\n"
+)
+new_search_dict = (
+    "                    all_songs.append({\n"
+    "                        'Id': s.get('id'), \n"
+    "                        'Name': title, \n"
+    "                        'AlbumId': s.get('albumId'),\n"
+    "                        'Album': s.get('album'),\n"
+    "                        'AlbumArtist': artist_name,\n"
+    "                        'ArtistId': artist_id,\n"
+    "                        'Path': s.get('path')\n"
+    "                    })\n"
+)
+if old_search_dict in nav_text:
+    nav_text = nav_text.replace(old_search_dict, new_search_dict, 1)
+
+old_album_dict = (
+    "                all_songs.append({\n"
+    "                    'Id': song.get('Id'), \n"
+    "                    'Name': song.get('Name'), \n"
+    "                    'AlbumArtist': song.get('AlbumArtist'),\n"
+    "                    'ArtistId': song.get('ArtistId'),\n"
+    "                    'Path': song.get('Path')\n"
+    "                })\n"
+)
+new_album_dict = (
+    "                all_songs.append({\n"
+    "                    'Id': song.get('Id'), \n"
+    "                    'Name': song.get('Name'), \n"
+    "                    'AlbumId': song.get('AlbumId') or song.get('albumId') or album_id,\n"
+    "                    'Album': song.get('Album') or song.get('album'),\n"
+    "                    'AlbumArtist': song.get('AlbumArtist'),\n"
+    "                    'ArtistId': song.get('ArtistId'),\n"
+    "                    'Path': song.get('Path')\n"
+    "                })\n"
+)
+if old_album_dict in nav_text:
+    nav_text = nav_text.replace(old_album_dict, new_album_dict, 1)
+
+nav_path.write_text(nav_text)

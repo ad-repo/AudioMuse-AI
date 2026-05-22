@@ -19,6 +19,7 @@ Dockerfile
 test/
 !test/scan_controller_ab/
 !test/scan_controller_ab/ab_test.py
+!test/scan_controller_ab/cli_e2e_test.py
 !test/scan_controller_ab/patch_allowlist.py
 
 # Student CLAP training (not needed in production)

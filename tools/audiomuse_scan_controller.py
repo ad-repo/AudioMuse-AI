@@ -57,23 +57,53 @@ def _table_exists(table_name: str) -> bool:
 
 
 def _existing_musicnn_ids(track_ids: list[str]) -> set[str]:
-    from tasks import analysis_helper as _ah
+    try:
+        from tasks import analysis_helper as _ah
 
-    existing: set[str] = set()
-    for chunk in _chunked(track_ids):
-        existing.update(_ah.get_existing_track_ids(chunk))
-    return existing
+        existing: set[str] = set()
+        for chunk in _chunked(track_ids):
+            existing.update(_ah.get_existing_track_ids(chunk))
+        return existing
+    except ImportError:
+        from app_helper import get_db
+
+        existing: set[str] = set()
+        for chunk in _chunked(track_ids):
+            with get_db() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT s.item_id FROM score s JOIN embedding e ON s.item_id = e.item_id "
+                    "WHERE s.item_id IN %s AND s.other_features IS NOT NULL "
+                    "AND s.energy IS NOT NULL AND s.mood_vector IS NOT NULL "
+                    "AND s.tempo IS NOT NULL",
+                    (tuple(chunk),),
+                )
+                existing.update(row[0] for row in cur.fetchall())
+        return existing
 
 
 def _missing_ids(table_name: str, track_ids: list[str]) -> set[str]:
-    from tasks import analysis_helper as _ah
-
     if not _table_exists(table_name):
         return set()
-    missing: set[str] = set()
-    for chunk in _chunked(track_ids):
-        missing.update(_ah.get_missing_ids_in_table(table_name, chunk))
-    return missing
+    try:
+        from tasks import analysis_helper as _ah
+
+        missing: set[str] = set()
+        for chunk in _chunked(track_ids):
+            missing.update(_ah.get_missing_ids_in_table(table_name, chunk))
+        return missing
+    except ImportError:
+        from app_helper import get_db
+
+        if table_name not in {"clap_embedding", "lyrics_embedding", "mulan_embedding"}:
+            raise ValueError(f"Unsupported table name: {table_name}")
+        ids = [str(track_id) for track_id in track_ids]
+        missing: set[str] = set()
+        for chunk in _chunked(ids):
+            with get_db() as conn, conn.cursor() as cur:
+                cur.execute(f"SELECT item_id FROM {table_name} WHERE item_id IN %s", (tuple(chunk),))
+                existing = {row[0] for row in cur.fetchall()}
+            missing.update(set(chunk) - existing)
+        return missing
 
 
 def load_statuses(include_clap: bool, include_lyrics: bool) -> list[TrackStatus]:
@@ -133,6 +163,12 @@ def summarize(statuses: list[TrackStatus]) -> dict[str, int]:
         "affected_albums": len({status.album_id for status in missing if status.album_id}),
         "missing_without_album_id": sum(1 for status in missing if not status.album_id),
     }
+
+
+def filter_statuses(statuses: list[TrackStatus], album: str | None = None) -> list[TrackStatus]:
+    if album is None:
+        return statuses
+    return [status for status in statuses if status.album == album]
 
 
 def print_summary(summary: dict[str, int]) -> None:
@@ -264,13 +300,16 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     status = subparsers.add_parser("status", help="Print scan status counts.")
+    status.add_argument("--album", help="Limit status counts to one album name.")
     status.add_argument("--json", action="store_true", help="Print JSON instead of text.")
 
     export = subparsers.add_parser("export-missing", help="Export track status rows as CSV.")
     export.add_argument("path", help="Output CSV path.")
+    export.add_argument("--album", help="Limit export to one album name.")
     export.add_argument("--all", action="store_true", help="Export all tracks, not just missing/partial tracks.")
 
     enqueue = subparsers.add_parser("enqueue", help="Enqueue missing tracks grouped by album.")
+    enqueue.add_argument("--album", help="Limit enqueueing to one album name.")
     enqueue.add_argument("--dry-run", action="store_true", help="Show what would be enqueued.")
     enqueue.add_argument("--from-csv", help="Limit enqueueing to track IDs from a CSV exported by this tool.")
     enqueue.add_argument("--limit", type=int, help="Maximum number of missing tracks to enqueue.")
@@ -282,7 +321,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    from flask_app import app
+    try:
+        from flask_app import app
+    except ImportError:
+        from app import app
 
     with app.app_context():
         statuses = load_statuses(
@@ -290,6 +332,7 @@ def main(argv: list[str] | None = None) -> int:
             include_lyrics=args.include_lyrics,
         )
         if args.command == "status":
+            statuses = filter_statuses(statuses, album=args.album)
             summary = summarize(statuses)
             if args.json:
                 print(json.dumps(summary, indent=2, sort_keys=True))
@@ -298,10 +341,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "export-missing":
+            statuses = filter_statuses(statuses, album=args.album)
             export_csv(statuses, args.path, missing_only=not args.all)
             return 0
 
         if args.command == "enqueue":
+            statuses = filter_statuses(statuses, album=args.album)
             result = enqueue_statuses(
                 statuses,
                 top_n_moods=args.top_n_moods,
